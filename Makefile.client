@@ -1,0 +1,38 @@
+.DEFAULT_GOAL := help
+
+# ── конфиг (переопредели: make -f Makefile.client chat PROMPT="…" GATEWAY=…) ──
+PY      ?= python3
+GATEWAY ?= http://localhost:8080
+MODEL   ?= qwen3-coder
+PROMPT  ?= Привет, кто ты?
+
+.PHONY: help install health models chat tools stream ask
+
+help: ## показать команды
+	@awk 'BEGIN{FS=":.*## "}/^[a-zA-Z_-]+:.*## /{printf "  %-13s %s\n",$$1,$$2}' $(MAKEFILE_LIST)
+
+install: ## поставить OpenAI SDK (нужен только для цели ask)
+	pip install openai
+
+health: ## проверка живости шлюза
+	curl -s $(GATEWAY)/health && echo
+
+models: ## список моделей
+	curl -s $(GATEWAY)/v1/models | $(PY) -m json.tool
+
+chat: ## обычный запрос (PROMPT=…)
+	curl -s $(GATEWAY)/v1/chat/completions -H 'Content-Type: application/json' \
+	  -d '{"model":"$(MODEL)","messages":[{"role":"user","content":"$(PROMPT)"}]}' \
+	  | $(PY) -m json.tool
+
+tools: ## запрос с инструментом (function calling)
+	curl -s $(GATEWAY)/v1/chat/completions -H 'Content-Type: application/json' \
+	  -d '{"model":"$(MODEL)","messages":[{"role":"user","content":"Погода в Париже?"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Текущая погода","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],"tool_choice":"auto"}' \
+	  | $(PY) -m json.tool
+
+stream: ## стриминговый запрос (SSE)
+	curl -N -s $(GATEWAY)/v1/chat/completions -H 'Content-Type: application/json' \
+	  -d '{"model":"$(MODEL)","messages":[{"role":"user","content":"$(PROMPT)"}],"stream":true}'
+
+ask: ## запрос через OpenAI SDK (python)
+	$(PY) -c "from openai import OpenAI; c=OpenAI(base_url='$(GATEWAY)/v1', api_key='EMPTY'); print(c.chat.completions.create(model='$(MODEL)', messages=[{'role':'user','content':'$(PROMPT)'}]).choices[0].message.content)"

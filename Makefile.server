@@ -1,0 +1,51 @@
+.DEFAULT_GOAL := help
+
+# ── конфиг (переопредели в команде: make -f Makefile.server vllm MODEL=…) ──
+PY            ?= python3
+MODEL         ?= Qwen/Qwen3-Coder-30B-A3B-Instruct
+MODEL_NAME    ?= qwen3-coder
+VLLM_PORT     ?= 8000
+WEB_PORT      ?= 8080
+REDIS_URL     ?= redis://localhost:6379/0
+VLLM_BASE_URL ?= http://localhost:$(VLLM_PORT)/v1
+MAX_INFLIGHT  ?= 64
+
+export REDIS_URL MODEL_NAME MAX_INFLIGHT
+
+.PHONY: help install redis vllm worker web worker-echo dev stop
+
+help: ## показать команды
+	@awk 'BEGIN{FS=":.*## "}/^[a-zA-Z_-]+:.*## /{printf "  %-13s %s\n",$$1,$$2}' $(MAKEFILE_LIST)
+
+install: ## поставить зависимости
+	pip install -r requirements.txt
+
+# ── боевой путь: запусти каждую из 4 целей в отдельном терминале ──
+redis: ## Redis в docker (альтернатива: redis-server)
+	docker run --rm -p 6379:6379 --name redis-llm redis:7-alpine
+
+vllm: ## vLLM с tool-парсером (нужен GPU)
+	vllm serve $(MODEL) --served-model-name $(MODEL_NAME) \
+	  --enable-auto-tool-choice --tool-call-parser qwen3-coder \
+	  --port $(VLLM_PORT)
+
+worker: ## воркер: форвард в vLLM
+	VLLM_BASE_URL=$(VLLM_BASE_URL) $(PY) server.py
+
+web: ## OpenAI-фронт (uvicorn)
+	uvicorn web:app --host 0.0.0.0 --port $(WEB_PORT)
+
+# ── быстрый тест без GPU ──
+worker-echo: ## воркер без vLLM (эхо-заглушка)
+	$(PY) server.py
+
+dev: ## весь стек без GPU в фоне: redis + worker-echo + web
+	docker run -d --rm -p 6379:6379 --name redis-llm redis:7-alpine
+	$(PY) server.py > worker.log 2>&1 &
+	uvicorn web:app --host 0.0.0.0 --port $(WEB_PORT) > web.log 2>&1 &
+	@sleep 1 && echo "up → http://localhost:$(WEB_PORT)/v1   (логи: worker.log, web.log; стоп: make -f Makefile.server stop)"
+
+stop: ## погасить фоновый dev-стек
+	-docker stop redis-llm
+	-pkill -f "server.py"
+	-pkill -f "uvicorn web:app"
