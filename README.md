@@ -18,7 +18,8 @@ OpenAI API (`/v1/chat/completions`), запросы ставятся в очер
 | `server.py` | Async-воркер: мост Redis ↔ vLLM, держит до `MAX_INFLIGHT` запросов одновременно. Без `VLLM_BASE_URL` отвечает эхо-заглушкой. |
 | `client.py` | Пример клиента на OpenAI SDK (обычный чат + цикл function calling). |
 | `Makefile.server` / `Makefile.client` | Запуск серверной и клиентской частей. |
-| `requirements.txt` | Зависимости серверной части (fastapi, uvicorn, redis, httpx). |
+| `requirements.txt` | Зависимости серверной части (fastapi, uvicorn, redis, httpx, cryptography). |
+| `crypto.py` | Симметричное шифрование payload'ов в Redis (общее для фронта и воркера). |
 
 ## Быстрый старт без GPU (эхо)
 
@@ -70,6 +71,24 @@ vllm serve Qwen/Qwen3-Coder-30B-A3B-Instruct \
 | `CONSUMER_NAME` | `<host>-<pid>` | имя консьюмера (уникально на процесс) |
 | `REQUEST_STREAM` | `llm:requests` | поток задач |
 | `IDLE_RECLAIM_MS` | `60000` | через сколько забирать «зависшие» сообщения упавших воркеров |
+| `GATEWAY_CRYPTO_KEY` | — *(шифрование выкл.)* | если задан — payload'ы в Redis шифруются (Fernet); **должен совпадать с фронтом**. См. [Шифрование](#шифрование-payloadов-в-redis) |
+| `HEARTBEAT_SEC` | `10` | период строки-сводки в логе и публикации метрик воркера в Redis |
+| `ADMIN_HOST` | `127.0.0.1` | интерфейс admin-панели воркера |
+| `ADMIN_PORT` | `8090` | порт admin-панели; `0` — выключить |
+| `LOG_LEVEL` | `INFO` | уровень логов (`DEBUG`/`INFO`/`WARNING`) |
+
+**Наблюдаемость (admin-панель воркера).** Воркер сам поднимает лёгкий HTTP на
+`ADMIN_HOST:ADMIN_PORT` (по умолчанию `127.0.0.1:8090`, прямо в своём event loop, без
+зависимостей). `GET /` — живой HTML-дашборд (авто-обновление; `make -f Makefile.server dashboard`
+откроет в браузере), `GET /stats` — JSON. Видно: глубину очереди (`backlog`), consumer-группы
+(pending/lag), метрики по воркерам (in-flight, обработано, ошибки, RPS, latency p50/p95,
+queue-wait p50/p95) и блок **«Последние запросы · расшифровано»** — последние ~15 запросов из
+`llm:requests`, расшифрованные на лету (у воркера есть ключ). Plaintext **никуда не пишется** —
+ни в логи, ни в Redis, только в ответ `/stats`. Свои метрики воркер раз в `HEARTBEAT_SEC` пишет
+строкой-сводкой в лог (`📊 inflight=… done=… rps=… p95=…`) и публикует в Redis
+(`llm:worker:stats:{consumer}`, с TTL) — так admin-панель любого воркера видит весь флот.
+
+Держи admin-порт за localhost (дефолт) или за firewall — он отдаёт расшифрованный текст.
 
 ### Фронт — `web.py`
 
@@ -80,8 +99,12 @@ vllm serve Qwen/Qwen3-Coder-30B-A3B-Instruct \
 | `GATEWAY_API_KEY` | — *(без авторизации)* | если задан — требуется `Authorization: Bearer <key>` |
 | `REPLY_TIMEOUT` | `300` | сколько ждать ответ воркера, сек (иначе `504`) |
 | `REQUEST_STREAM` | `llm:requests` | поток задач (тот же, что у воркера) |
+| `STREAM_MAXLEN` | `10000` | подрезка потока задач (`XADD MAXLEN ~`), чтобы не рос вечно |
+| `GATEWAY_CRYPTO_KEY` | — *(шифрование выкл.)* | если задан — payload'ы в Redis шифруются (Fernet); **должен совпадать с воркером**. См. [Шифрование](#шифрование-payloadов-в-redis) |
+| `LOG_LEVEL` | `INFO` | уровень логов (`DEBUG`/`INFO`/`WARNING`) |
 
 Порт фронта — аргумент uvicorn: `uvicorn web:app --host 0.0.0.0 --port 8080`.
+Наблюдаемость живёт на воркере (admin-панель, см. выше), не на фронте.
 
 ### vLLM (флаги `vllm serve`)
 
@@ -107,6 +130,25 @@ vllm serve Qwen/Qwen3-Coder-30B-A3B-Instruct \
 | `llm:requests` | поток задач (consumer-group `workers`) |
 | `llm:response:{id}` | ответ unary-запроса (list, `BLPOP`), TTL `RESP_TTL` |
 | `llm:stream:{id}` | чанки стрим-ответа (stream, `XREAD`), TTL `RESP_TTL` |
+| `llm:worker:stats:{consumer}` | метрики воркера (string JSON), TTL `3×HEARTBEAT_SEC` |
+
+### Шифрование payload'ов в Redis
+
+По умолчанию запросы и ответы лежат в Redis **в открытом виде** — любой с доступом
+к БД (`MONITOR`, `XRANGE`, дамп RDB, реплика) читает переписку. Задай общий ключ
+`GATEWAY_CRYPTO_KEY` фронту и воркеру — и тело запроса (`payload`) и ответы
+(`llm:response` / чанки `llm:stream`) шифруются Fernet (AES-128-CBC + HMAC). В Redis
+остаётся только шифртекст; маршрутные поля `id`/`stream`/`type` — открыты (по ним
+идёт роутинг). Модель угроз: **доверенные — фронт и воркер, недоверенный — Redis.**
+
+```bash
+# один ключ на оба процесса
+export GATEWAY_CRYPTO_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+```
+
+Несколько ключей через запятую → ротация (шифруем первым, расшифровываем любым).
+Ключ должен совпадать у фронта и воркера, иначе расшифровка падает `InvalidToken`.
+Шифрование — между фронтом и воркером; HTTPS до клиента это не отменяет.
 
 ## Клиент
 

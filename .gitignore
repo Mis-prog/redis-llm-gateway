@@ -2,14 +2,26 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+dist/
+build/
+
+# Virtual environments
 .venv/
 venv/
 env/
 
-# runtime / logs
+# uv (локальный пин версии)
+.python-version
+
+# Runtime / logs
 *.log
 
 # OS / editors
 .DS_Store
 .idea/
 .vscode/
+*.swp
+*.swo
+
+# Qwen Code
+.qwen/

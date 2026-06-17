@@ -11,8 +11,6 @@ PROMPT  ?= Привет, кто ты?
 help: ## показать команды
 	@awk 'BEGIN{FS=":.*## "}/^[a-zA-Z_-]+:.*## /{printf "  %-13s %s\n",$$1,$$2}' $(MAKEFILE_LIST)
 
-install: ## поставить OpenAI SDK (нужен только для цели ask)
-	pip install openai
 
 health: ## проверка живости шлюза
 	curl -s $(GATEWAY)/health && echo
