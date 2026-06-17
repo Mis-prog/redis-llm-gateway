@@ -1,16 +1,24 @@
 .DEFAULT_GOAL := help
 
-# ── конфиг (переопредели: make -f Makefile.client chat PROMPT="…" GATEWAY=…) ──
-PY      ?= python3
-GATEWAY ?= http://localhost:8080
-MODEL   ?= qwen3-coder
-PROMPT  ?= Привет, кто ты?
+# конфиг берётся из .env (если он есть): тот же файл, что и у сервера
+-include .env
+export
 
-.PHONY: help install health models chat tools stream ask
+# ── дефолты (переопредели: make -f Makefile.client chat PROMPT="…" GATEWAY=…) ──
+VENV       ?= .venv
+PY         ?= $(shell [ -x $(VENV)/bin/python ] && echo $(VENV)/bin/python || echo python3)
+GATEWAY    ?= http://localhost:8080
+MODEL_NAME ?= qwen3-coder
+PROMPT     ?= Привет, кто ты?
+
+.PHONY: help install health models chat tools stream ask smoke
 
 help: ## показать команды
 	@awk 'BEGIN{FS=":.*## "}/^[a-zA-Z_-]+:.*## /{printf "  %-13s %s\n",$$1,$$2}' $(MAKEFILE_LIST)
 
+install: ## venv + openai SDK (для client.py / ask)
+	python3 -m venv $(VENV)
+	$(VENV)/bin/pip install -U pip openai
 
 health: ## проверка живости шлюза
 	curl -s $(GATEWAY)/health && echo
@@ -20,17 +28,24 @@ models: ## список моделей
 
 chat: ## обычный запрос (PROMPT=…)
 	curl -s $(GATEWAY)/v1/chat/completions -H 'Content-Type: application/json' \
-	  -d '{"model":"$(MODEL)","messages":[{"role":"user","content":"$(PROMPT)"}]}' \
+	  -d '{"model":"$(MODEL_NAME)","messages":[{"role":"user","content":"$(PROMPT)"}]}' \
 	  | $(PY) -m json.tool
 
 tools: ## запрос с инструментом (function calling)
 	curl -s $(GATEWAY)/v1/chat/completions -H 'Content-Type: application/json' \
-	  -d '{"model":"$(MODEL)","messages":[{"role":"user","content":"Погода в Париже?"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Текущая погода","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],"tool_choice":"auto"}' \
+	  -d '{"model":"$(MODEL_NAME)","messages":[{"role":"user","content":"Погода в Париже?"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Текущая погода","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],"tool_choice":"auto"}' \
 	  | $(PY) -m json.tool
 
 stream: ## стриминговый запрос (SSE)
 	curl -N -s $(GATEWAY)/v1/chat/completions -H 'Content-Type: application/json' \
-	  -d '{"model":"$(MODEL)","messages":[{"role":"user","content":"$(PROMPT)"}],"stream":true}'
+	  -d '{"model":"$(MODEL_NAME)","messages":[{"role":"user","content":"$(PROMPT)"}],"stream":true}'
 
 ask: ## запрос через OpenAI SDK (python)
-	$(PY) -c "from openai import OpenAI; c=OpenAI(base_url='$(GATEWAY)/v1', api_key='EMPTY'); print(c.chat.completions.create(model='$(MODEL)', messages=[{'role':'user','content':'$(PROMPT)'}]).choices[0].message.content)"
+	$(PY) -c "from openai import OpenAI; c=OpenAI(base_url='$(GATEWAY)/v1', api_key='EMPTY'); print(c.chat.completions.create(model='$(MODEL_NAME)', messages=[{'role':'user','content':'$(PROMPT)'}]).choices[0].message.content)"
+
+smoke: ## быстрый прогон: health + models + chat + stream
+	@$(MAKE) -s -f Makefile.client health
+	@$(MAKE) -s -f Makefile.client models
+	@$(MAKE) -s -f Makefile.client chat
+	@$(MAKE) -s -f Makefile.client stream
+	@echo

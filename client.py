@@ -1,7 +1,7 @@
 """Пример клиента к redis-llm-gateway через OpenAI SDK.
 
 Запуск:  pip install openai && python client.py
-Конфиг:  GATEWAY (по умолчанию http://localhost:8080), MODEL (qwen3-coder),
+Конфиг:  GATEWAY (по умолчанию http://localhost:8080), MODEL_NAME (qwen3-coder),
          GATEWAY_API_KEY (если на фронте включена авторизация).
 """
 import json, os
@@ -11,7 +11,7 @@ client = OpenAI(
     base_url=f"{os.getenv('GATEWAY', 'http://localhost:8080')}/v1",
     api_key=os.getenv("GATEWAY_API_KEY", "EMPTY"),
 )
-MODEL = os.getenv("MODEL", "qwen3-coder")
+MODEL = os.getenv("MODEL_NAME") or os.getenv("MODEL", "qwen3-coder")
 
 
 def simple_chat():

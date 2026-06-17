@@ -13,6 +13,9 @@ env/
 # uv (локальный пин версии)
 .python-version
 
+# Локальный конфиг с секретами (ключ шифрования, api-ключи) — в гите только .env.example
+.env
+
 # Runtime / logs
 *.log
 
