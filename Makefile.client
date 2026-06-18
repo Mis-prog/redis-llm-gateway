@@ -1,24 +1,48 @@
 .DEFAULT_GOAL := help
 
-# конфиг берётся из .env (если он есть): тот же файл, что и у сервера
+# Клиентская часть: OpenAI-фронт web.py (шлюз) + готовые проверки тракта (curl/SDK).
+# Запускается на машине у пользователя. Конфиг — из .env (общий с воркером,
+# см. .env.example).
 -include .env
 export
 
-# ── дефолты (переопредели: make -f Makefile.client chat PROMPT="…" GATEWAY=…) ──
+# ── дефолты (переопредели: make chat PROMPT="…" GATEWAY=…) ──
 VENV       ?= .venv
 PY         ?= $(shell [ -x $(VENV)/bin/python ] && echo $(VENV)/bin/python || echo python3)
-GATEWAY    ?= http://localhost:8080
+PIP        ?= $(VENV)/bin/pip
+WEB_PORT   ?= 8080
+GATEWAY    ?= http://localhost:$(WEB_PORT)
 MODEL_NAME ?= qwen3-coder
 PROMPT     ?= Привет, кто ты?
 
-.PHONY: help install health models chat tools stream ask smoke
+WEB_LOG    ?= /tmp/redis-llm-web.log
+
+.PHONY: help install web up stop restart logs health models chat tools stream ask smoke
 
 help: ## показать команды
 	@awk 'BEGIN{FS=":.*## "}/^[a-zA-Z_-]+:.*## /{printf "  %-13s %s\n",$$1,$$2}' $(MAKEFILE_LIST)
 
-install: ## venv + openai SDK (для client.py / ask)
+install: ## venv + зависимости фронта (fastapi/uvicorn/redis/…) + openai SDK
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip install -U pip openai
+	$(PIP) install -U pip
+	$(PIP) install -r requirements.txt openai
+
+web: ## OpenAI-фронт web.py (uvicorn) на :$(WEB_PORT)
+	$(PY) -m uvicorn web:app --host 0.0.0.0 --port $(WEB_PORT)
+
+up: ## фронт web.py в фоне
+	@nohup $(PY) -m uvicorn web:app --host 0.0.0.0 --port $(WEB_PORT) > $(WEB_LOG) 2>&1 &
+	@sleep 2
+	@echo "фронт http://localhost:$(WEB_PORT)/v1   ·   логи $(WEB_LOG)   ·   стоп: make -f Makefile.client stop"
+
+stop: ## погасить фронт
+	-pkill -f "uvicorn web:app"
+	-rm -f $(WEB_LOG)
+
+restart: stop up ## перезапустить фронт
+
+logs: ## хвост логов фронта
+	@tail -n 40 -F $(WEB_LOG)
 
 health: ## проверка живости шлюза
 	curl -s $(GATEWAY)/health && echo

@@ -1,4 +1,6 @@
 import os, json, uuid, time, logging
+
+from keys import REQUEST_STREAM, resp_key, stream_key  # импорт keys грузит .env до crypto
 import redis.asyncio as redis
 from redis.exceptions import TimeoutError as RedisTimeoutError
 from fastapi import FastAPI, Request, HTTPException, Header
@@ -11,7 +13,6 @@ from crypto import encrypt, decrypt, ENABLED as CRYPTO_ON
 # Наблюдаемость/admin живёт на воркере (server.py, ADMIN_PORT), а не здесь.
 
 REDIS_URL      = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-REQUEST_STREAM = os.getenv("REQUEST_STREAM", "llm:requests")
 MODEL_NAME     = os.getenv("MODEL_NAME", "qwen3-coder")
 GATEWAY_KEY    = os.getenv("GATEWAY_API_KEY")          # опц. bearer для клиентов
 REPLY_TIMEOUT  = int(os.getenv("REPLY_TIMEOUT", "300"))
@@ -68,7 +69,7 @@ async def chat_completions(request: Request, authorization: str | None = Header(
         )
 
     try:
-        reply = await r.blpop(f"llm:response:{rid}", timeout=REPLY_TIMEOUT)
+        reply = await r.blpop(resp_key(rid), timeout=REPLY_TIMEOUT)
     except RedisTimeoutError:
         reply = None
     if reply is None:
@@ -80,7 +81,7 @@ async def chat_completions(request: Request, authorization: str | None = Header(
 
 async def _relay(rid, t0):
     """Перекладываем SSE-чанки воркера (Redis Stream) в HTTP-ответ клиента."""
-    key, last = f"llm:stream:{rid}", "0"
+    key, last = stream_key(rid), "0"
     while True:
         try:
             res = await r.xread({key: last}, count=20, block=REPLY_TIMEOUT * 1000)

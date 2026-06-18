@@ -1,13 +1,27 @@
 [project]
 name = "redis-llm-gateway"
 version = "0.1.0"
-description = "Add your description here"
+description = "OpenAI-совместимый шлюз к vLLM поверх Redis Streams"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "redis>=8.0.0",
+    "redis>=5.2,<6",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "httpx>=0.27",
     "cryptography>=42",
+    "python-dotenv>=1.0",
 ]
+
+# dev/test-зависимости — НЕ попадают в основной requirements.txt (прод их не ставит).
+# Ставит `uv sync` / `uv run`, либо `make test-deps` (pip в .venv).
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "fakeredis>=2.26",   # in-process Redis (вкл. streams + consumer groups) для смоук-теста
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]       # tests/ импортируют web/server/keys/crypto из корня проекта
+testpaths = ["tests"]
+addopts = "-q"

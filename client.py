@@ -3,8 +3,16 @@
 Запуск:  pip install openai && python client.py
 Конфиг:  GATEWAY (по умолчанию http://localhost:8080), MODEL_NAME (qwen3-coder),
          GATEWAY_API_KEY (если на фронте включена авторизация).
+         Если стоит python-dotenv и рядом есть .env — переменные подхватятся сами.
 """
 import json, os
+
+try:                                  # .env для локального запуска — необязательно
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from openai import OpenAI
 
 client = OpenAI(
